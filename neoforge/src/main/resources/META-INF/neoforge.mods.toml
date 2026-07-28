@@ -1,0 +1,28 @@
+modLoader = "javafml"
+loaderVersion = "${neoforge_loader_version_range}"
+license = "${license}"
+
+[[mods]]
+modId = "stereospace"
+version = "${version}"
+displayName = "${mod_name}"
+credits = "${credits}"
+authors = "${neoforge_mod_authors}"
+description = '''${description}'''
+
+[[mixins]]
+config = "stereospace.mixins.json"
+
+[[dependencies.stereospace]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${neoforge_version},)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.stereospace]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"

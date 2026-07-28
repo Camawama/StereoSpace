@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "package": "net.camacraft.stereospace.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "minVersion": "0.8",
+  "refmap": "stereospace.refmap.json",
+  "mixins": [
+  ],
+  "client": [
+    "client.SoundEngineMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

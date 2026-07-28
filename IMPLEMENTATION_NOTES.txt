@@ -1,0 +1,343 @@
+================================================================================
+ VIRTUAL STEREO SOUND SYSTEM - IMPLEMENTATION NOTES
+ Stereo Space 1.21.1
+================================================================================
+
+THE PROBLEM
+--------------------------------------------------------------------------------
+Minecraft's sound engine (OpenAL) can only spatialize MONO audio. If a sound
+file is stereo, OpenAL cannot position it in 3D space, so the game plays it
+"everywhere" - it follows the player with no direction and no sense of where
+the source is in the world.
+
+THE IDEA
+--------------------------------------------------------------------------------
+A single STEREO .ogg is uploaded as a normal sound asset. When it is played
+through this system, the client splits the decoded audio into its LEFT and
+RIGHT channels at runtime and plays them as two separate MONO sound sources in
+the world. Every tick, on every client, the two sources are repositioned so
+that the pair always "faces" that player:
+
+  - the LEFT channel sits virtually to the player's left of its anchor point
+  - the RIGHT channel sits virtually to the player's right of its anchor point
+
+Because the offset is recomputed from the local player's own listener position
+each tick, the stereo image rotates to face you as you walk around the source,
+while distance attenuation and panning behave exactly like a normal positional
+mono sound. Each client computes its own pair locally, so every nearby player
+hears their own private, correctly-oriented stereo image.
+
+On top of that, the two channels each have their own independent anchor
+position on the server. They start at the same spot (classic stereo emitter),
+but can be moved apart, swept around, or animated separately at runtime for
+positional stereo and other spatial effects.
+
+================================================================================
+ HOW THE RUNTIME CHANNEL SPLIT WORKS
+================================================================================
+
+Minecraft decodes .ogg files itself (JOrbisAudioStream) into interleaved
+16-bit PCM before handing the data to OpenAL. The stereo limitation lives
+entirely on the OpenAL side - a stereo AL buffer won't spatialize - so the
+trick is to intercept the decoded PCM *between* the decoder and OpenAL and
+de-interleave it there. No file conversion, no resource pack tricks: the split
+happens on the raw samples at play time.
+
+Both halves of a virtual stereo sound are ClientStereoSoundInstance objects
+pointing at the SAME stereo sound event; each knows whether it is the LEFT or
+RIGHT half. A mixin into SoundEngine.play (SoundEngineMixin) wraps the two
+places the engine fetches audio data and, when the instance being played is a
+stereo-channel instance, swaps in split data:
+
+  STREAMED sounds ("stream": true in sounds.json)
+    The decoded stereo AudioStream is wrapped in a StereoChannelAudioStream.
+    Where this hook lives differs per loader: on Fabric the engine calls
+    SoundBufferLibrary.getStream(...) directly and the mixin wraps that call
+    site (marked require = 0, since it does not exist on NeoForge); NeoForge
+    instead patches an overridable getStream(...) method into SoundInstance
+    and routes the streaming branch through it, so the stereo instance
+    classes simply implement that method themselves (declared without
+    @Override, as it does not exist in vanilla mappings - it is dead code on
+    Fabric and the live path on NeoForge). Either way the engine receives a
+    StereoChannelAudioStream, which:
+      - reports a MONO AudioFormat (same sample rate),
+      - on every read(n), pulls 2n bytes from the stereo source and copies out
+        every other 16-bit sample. A stereo frame is 4 bytes
+        [L lo, L hi, R lo, R hi]; the LEFT half copies bytes 0-1 of each
+        frame, the RIGHT half bytes 2-3. The two bytes are copied verbatim,
+        so the code never cares about endianness.
+      - source reads aren't guaranteed to be frame-aligned, so up to one
+        partial frame is carried over between reads (also keeps loop seams
+        of LoopingAudioStream seamless).
+    OpenAL only ever sees a mono stream, so it spatializes it fully. Each
+    half opens its own decoder, so the two streams don't fight over one file.
+
+  NON-STREAMED sounds (complete in-memory buffer)
+    SoundBufferLibrary.getCompleteBuffer(...) is wrapped: instead of the
+    shared (stereo) SoundBuffer, the instance receives a mono SoundBuffer
+    from StereoChannelBuffers, which decodes the file once off-thread,
+    de-interleaves it into two mono PCM buffers, and caches both halves per
+    file - mirroring vanilla's own complete-buffer cache. The cache is
+    dropped when the sound engine reloads (the reload destroys the AL
+    context, and every AL buffer dies with it, so dropping the map is all
+    the cleanup needed).
+
+  Files that are already mono (or an exotic non-16-bit format) pass through
+  both wrappers untouched - they simply play the same audio on both halves,
+  so the system degrades gracefully.
+
+================================================================================
+ AUTOMATIC SPLITTING (JUKEBOXES AND EVERY OTHER VANILLA-PATH SOUND)
+================================================================================
+
+The StereoSounds server API covers sounds a mod plays deliberately, but most
+stereo audio in practice arrives through vanilla code paths - above all
+jukebox music discs, which the client plays as a plain positional
+SimpleSoundInstance (SoundSource.RECORDS, attenuation LINEAR, volume 4). Those
+never touch the API, so they used to play exactly like vanilla: everywhere at
+once. AutoStereoSplitter fixes this for ALL of them, entirely client side,
+with no cooperation needed from the mod that owns the sound:
+
+  1. A @HEAD hook on SoundEngine.play inspects every sound about to play.
+     Sounds that are relative, unattenuated (music, UI clicks) or already a
+     split half are left alone - vanilla's everywhere-at-once playback is
+     CORRECT for those.
+  2. For positional sounds, the sound is resolved (variant picked) once, and
+     the actual .ogg is sniffed for its channel count: the Vorbis
+     identification header carries it at a fixed offset after the
+     "\x01vorbis" marker, so only the first 256 bytes of the file are read.
+     The verdict is cached per file until the next resource reload.
+  3. If the file is stereo, the original play call is cancelled and two
+     SplitStereoSoundInstance halves are played instead. Each half wraps the
+     original instance and mirrors all of its properties (volume, pitch,
+     source, looping, attenuation), pins the variant resolved in step 2 so
+     both halves play the same file, and billboards itself around the
+     original's position every tick - same math as the server-driven system.
+     The StereoChannelSound marker interface then makes the splitting hooks
+     feed each half only its channel of the decoded audio.
+  4. Stopping: code that stops a sound (e.g. LevelRenderer when a disc pops
+     out of a jukebox) holds the ORIGINAL instance - which the engine never
+     actually played. A hook on SoundEngine.stop forwards such stops to the
+     two halves. Tickable originals keep working too: the LEFT half ticks
+     the original (once per pair per tick) so moving/fading sounds keep
+     their logic, and both halves follow its position.
+
+AutoStereoSplitter.setEnabled(false) turns the feature off globally;
+AutoStereoSplitter.setSpread(blocks) adjusts how far apart the two virtual
+channels sit for auto-split sounds (default 4.0).
+
+Keeping the halves sample-locked: both instances are constructed with a
+RandomSource seeded by the server-assigned sound id. sounds.json variant
+selection and volume/pitch randomization are driven by the instance's random,
+so identical seeds guarantee both halves resolve the same file with the same
+pitch - otherwise the channels could pick different variants or drift apart.
+
+================================================================================
+ ARCHITECTURE
+================================================================================
+
+New files (all in the `common` module, shared by Fabric and NeoForge):
+
+  common/src/main/java/net/camacraft/stereospace/api/
+    StereoSoundChannel.java    - LEFT / RIGHT enum, each with a direction sign
+                                 (-1 / +1) used for the offset math.
+    StereoSoundPackets.java    - the three S2C custom payloads + registration.
+    ServerStereoSound.java     - server-side handle to one active stereo sound.
+    StereoSounds.java          - public server-side API + per-level manager.
+
+  common/src/main/java/net/camacraft/stereospace/client/
+    StereoChannelSound.java         - marker interface: "this instance is one
+                                      half of a stereo pair" + its channel.
+    StereoBillboard.java            - the shared listener-facing offset math.
+    ClientStereoSoundInstance.java  - one mono half of a server-driven
+                                      (StereoSounds API) sound.
+    ClientStereoSoundManager.java   - client registry of active API pairs,
+                                      keyed by the server-assigned sound id.
+    SplitStereoSoundInstance.java   - one mono half of an AUTO-split sound;
+                                      wraps and mirrors an arbitrary vanilla
+                                      SoundInstance (e.g. a jukebox record).
+    AutoStereoSplitter.java         - detects positional stereo sounds at
+                                      play time (Vorbis header sniff) and
+                                      swaps them for a wrapped mono pair.
+    StereoChannelAudioStream.java   - mono-channel wrapper around a decoded
+                                      stereo AudioStream (streamed path).
+    StereoChannelBuffers.java       - decode-once split cache producing mono
+                                      SoundBuffers (non-streamed path).
+
+  common/src/main/java/net/camacraft/stereospace/
+    StereoSpace.java                - mod id/logger and the packet-sender hook
+                                     the loader modules install.
+    mixin/client/SoundEngineMixin.java - four hooks (registered in
+                                     stereospace.mixins.json, client side):
+      - @Inject HEAD of SoundEngine.play: the automatic splitter (above),
+      - @Inject HEAD of SoundEngine.stop: forwards stops of auto-split
+        originals to their two halves,
+      - two @WrapOperation hooks on the getCompleteBuffer / getStream call
+        sites inside play that perform the actual channel split,
+      - plus dropping the split caches on sound reload.
+
+Loader modules (all the loader-specific code in the mod):
+
+  fabric/.../StereoSpaceFabric.java       - registers the S2C payload types,
+      installs ServerPlayNetworking::send as the packet sender, and forwards
+      SERVER_STARTING / START_WORLD_TICK / DISCONNECT into StereoSounds.
+  fabric/.../StereoSpaceFabricClient.java - client entrypoint; registers the
+      three packet receivers into ClientStereoSoundManager (game thread).
+  neoforge/.../StereoSpaceNeoForge.java   - same wiring via
+      RegisterPayloadHandlersEvent, PacketDistributor and the NeoForge game
+      bus events (ServerStartingEvent, LevelTickEvent.Pre, PlayerLoggedOut).
+
+================================================================================
+ SERVER SIDE
+================================================================================
+
+StereoSounds.play(...) is the entry point:
+
+  StereoSounds.play(level, stereoSoundEvent, source, pos,
+                    volume, pitch, spread, looping)
+
+  - `stereoSoundEvent` : ONE sound event backed by a normal stereo .ogg.
+  - `spread`  : distance in blocks between the two virtual channels as heard
+                by a player (each channel sits spread/2 from its anchor).
+  - `looping` : looping sounds are re-sent to players that come into range
+                later; one-shots are only sent to players in range at play time.
+  - Overloads exist for independent left/right start positions, a raw
+    ResourceLocation sound id, and an explicit tracking range (default range
+    is max(64, 16*volume + spread + 16) blocks).
+
+play() assigns the sound a unique long id, stores a ServerStereoSound handle
+in a per-dimension map, and immediately sends a PlayStereoSoundPayload to
+every player in range. The handle is returned to the caller:
+
+  ServerStereoSound handle = StereoSounds.play(...);
+  handle.setPosition(pos);            // move both anchors together
+  handle.setLeftPosition(leftPos);    // move ONLY the left channel
+  handle.setRightPosition(rightPos);  // move ONLY the right channel
+  handle.setPositions(l, r);          // move both independently, one packet
+  handle.stop();                      // stop on all clients and remove
+  handle.discard();                   // forget server-side, let one-shots
+                                      // finish naturally on the client
+
+Every server level tick (forwarded by the loader modules into
+StereoSounds.tickLevel) the manager updates each sound's listener set:
+
+  - players who left range / changed dimension / logged out are removed and
+    sent a StopStereoSoundPayload (frees their sound channels),
+  - for LOOPING sounds, players who newly entered range are sent a fresh
+    PlayStereoSoundPayload carrying the current anchor positions.
+
+Movement packets are only sent to the current listener set, so faraway players
+cost nothing. All per-player state is a Set<UUID> per sound. State is cleared
+when a new server starts, and removed sounds are pruned from the map on tick.
+
+================================================================================
+ NETWORKING
+================================================================================
+
+Three S2C payloads (payload records live in common; each loader module
+registers them with its own networking API; handlers run on the client game
+thread on both loaders):
+
+  stereospace:play_stereo_sound   id, soundId, SoundSource, leftPos, rightPos,
+                                  volume, pitch, spread, looping
+  stereospace:move_stereo_sound   id, leftPos, rightPos
+  stereospace:stop_stereo_sound   id
+
+The id is a server-assigned long, so the server can address a specific playing
+sound on any client for moves and stops (and it doubles as the shared random
+seed that keeps the two halves in sync). Positions are sent as 3 doubles.
+
+================================================================================
+ CLIENT SIDE
+================================================================================
+
+ClientStereoSoundManager keeps Map<Long, StereoPair> where a StereoPair is the
+two ClientStereoSoundInstance objects (left + right).
+
+  - handlePlay: resolves the sound id against the SOUND_EVENT registry
+    (falling back to SoundEvent.createVariableRangeEvent for sounds.json-only
+    sounds), builds both channel instances from it and hands them to
+    Minecraft's SoundManager. If the id is already playing (e.g. re-entering
+    range with stale state) the old pair is stopped first. Dead entries
+    (finished one-shots, sounds wiped by a disconnect) are pruned
+    opportunistically via SoundManager.isActive.
+  - handleMove: updates the anchor of each half; the instances apply it on
+    their next tick.
+  - handleStop: force-stops both halves and removes the entry.
+
+ClientStereoSoundInstance extends AbstractTickableSoundInstance - the same
+mechanism vanilla uses for minecart/elytra sounds - so the engine calls tick()
+every game tick while the sound plays. Each tick the instance recomputes its
+world position ("billboarding"):
+
+  listener = main camera position (falls back to the player position)
+  toAnchor = horizontal vector from listener to this channel's anchor
+  dir      = normalize(toAnchor)
+  right    = dir x up = (-dir.z, 0, dir.x)     // player's right when facing
+                                               // the anchor
+  position = anchor + right * (spread / 2) * channelDirection
+
+where channelDirection is -1 for LEFT and +1 for RIGHT. Sanity check: a player
+south of the anchor faces north, so `right` points east - the RIGHT channel
+sits to the east (the player's right), the LEFT channel to the west. Walk to
+the other side and the pair flips with you.
+
+Edge cases handled:
+
+  - Listener horizontally on top of the anchor (no facing direction): the
+    offset falls back to the camera's own left/right vector, so the stereo
+    image follows your head orientation instead of collapsing.
+  - Looping instances override canStartSilent() -> true, so a loop that starts
+    out of earshot still ticks silently and fades in as you approach (vanilla
+    would otherwise refuse to start it and never retry).
+  - Attenuation is LINEAR with vanilla's standard 16 * volume audible radius,
+    so each mono half attenuates exactly like any world sound. Sound effect
+    mods that hook the normal SoundEngine.play path (reverb filters etc.)
+    apply to these instances too.
+
+Because each half is a genuine mono source at a genuine world position, OpenAL
+gives full HRTF-style directionality, distance attenuation and (on supported
+setups) reverb per channel - the thing stereo files can never get.
+
+================================================================================
+ BEHAVIOUR NOTES / LIMITATIONS
+================================================================================
+
+  - Any normal stereo .ogg works; it is split at play time. Mono files also
+    work and simply play identically on both halves. Sounds that are ALREADY
+    mono were never broken - they are positional in vanilla, and the auto
+    splitter deliberately leaves them alone.
+  - EVERY positional stereo sound is now split automatically (jukebox discs,
+    vanilla playSound, other mods), not just sounds played through the
+    StereoSounds API. The API is still what you use when you want the two
+    channels as independently movable anchors. Non-positional sounds (music,
+    UI, relative/unattenuated) keep vanilla behavior on purpose.
+  - The two halves are started in the same handler call and share a random
+    seed, but OpenAL does not hard-sample-lock two sources; over very long
+    loops the halves could drift by a few ms. In practice they stay coherent.
+  - A looping sound restarts from the beginning for a player who leaves and
+    re-enters range (the server cannot seek a client's sound).
+  - One-shot sounds finish by themselves on the client, but keep their server
+    handle (so they can be moved mid-flight). Call stop()/discard() on the
+    handle when you no longer need it.
+  - Volume/pitch are fixed at play time; positions are the live-mutable part.
+  - For long music, prefer "stream": true in sounds.json (as with any long
+    sound) - streamed sounds are split on the fly with no caching, while
+    non-streamed sounds are fully decoded and their two halves kept in the
+    split-buffer cache until the next resource reload.
+
+================================================================================
+ QUICK USAGE EXAMPLE
+================================================================================
+
+  // Register ONE SoundEvent backed by a normal stereo ogg, then, server-side:
+  ServerStereoSound music = StereoSounds.play(
+      level, MY_STEREO_SONG, SoundSource.RECORDS,
+      new Vec3(x, y, z), 1.0F, 1.0F, 4.0F, true);
+
+  // Later, e.g. in a block entity tick - tear the channels apart:
+  music.setLeftPosition(center.add(-t, 0, 0));
+  music.setRightPosition(center.add(t, 0, 0));
+
+  // And when the jukebox is broken:
+  music.stop();
