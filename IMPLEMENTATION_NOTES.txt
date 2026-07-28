@@ -152,6 +152,25 @@ time), so a spread change is heard immediately on already-playing sounds such
 as jukebox records. Server-API sounds keep their per-sound spread. The values
 are not persisted; they reset to defaults on game restart.
 
+Moving / entity-attached sounds:
+  - Auto-split path: the ticking half (see 4. above) keeps ticking the
+    original, so any TickableSoundInstance original - vanilla's
+    EntityBoundSoundInstance from the Level.playSound(Player, Entity, ...)
+    overload included - keeps moving, and both halves re-billboard around it
+    every tick. NOTE: a sound played through the position-based
+    Level.playSound(Player, BlockPos/x/y/z, ...) overloads carries no entity
+    on the client and CANNOT follow anything; in unmodded vanilla a stereo
+    file on that path played globally/head-locked (so it seemed to "follow"
+    the player), while Stereo Space pins it at its emission point. Emitters
+    that should follow must use the entity overload or the API below.
+  - Server API: ServerStereoSound.attachTo(entity) (or the
+    StereoSounds.playAttached convenience) makes both channel anchors follow
+    the entity every level tick via the existing Move payloads - the stereo
+    center rides the entity. detach() stops following; a removed or
+    dimension-changed entity stops looping sounds and lets one-shots finish
+    in place. Manual setPositions calls while attached are overwritten on
+    the next tick.
+
 Keeping the halves sample-locked: both instances are constructed with a
 RandomSource seeded by the server-assigned sound id. sounds.json variant
 selection and volume/pitch randomization are driven by the instance's random,

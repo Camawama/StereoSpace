@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.camacraft.stereospace.StereoSpace;
@@ -88,6 +89,23 @@ public final class StereoSounds {
 		return sound;
 	}
 
+	/**
+	 * Plays a virtual stereo sound attached to an entity: both channel anchors
+	 * (the stereo center) follow the entity's position every level tick. See
+	 * {@link ServerStereoSound#attachTo} for the follow/removal semantics; use
+	 * {@code play(...).attachTo(entity)} if you need non-default positions or
+	 * range.
+	 */
+	public static ServerStereoSound playAttached(Entity entity, SoundEvent sound, SoundSource source, float volume, float pitch, float spread, boolean looping) {
+		if (!(entity.level() instanceof ServerLevel level)) {
+			throw new IllegalArgumentException("playAttached must be called with a server-side entity");
+		}
+
+		ServerStereoSound stereoSound = play(level, sound, source, entity.position(), volume, pitch, spread, looping);
+		stereoSound.attachTo(entity);
+		return stereoSound;
+	}
+
 	private static double defaultRange(float volume, float spread) {
 		return Math.max(64.0, 16.0 * volume + spread + 16.0);
 	}
@@ -106,6 +124,7 @@ public final class StereoSounds {
 
 		while (iterator.hasNext()) {
 			ServerStereoSound sound = iterator.next();
+			sound.tickAttachment();
 
 			if (sound.isRemoved()) {
 				iterator.remove();

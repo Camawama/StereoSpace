@@ -28,6 +28,7 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 	private final Sound sound;
 	private final StereoSoundChannel channel;
 
+	private SplitStereoSoundInstance sibling;
 	private boolean stopped;
 	private double x;
 	private double y;
@@ -39,6 +40,11 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 		this.sound = sound;
 		this.channel = channel;
 		this.updatePosition();
+	}
+
+	/** The other half of the pair, set right after both halves are built. */
+	void setSibling(SplitStereoSoundInstance sibling) {
+		this.sibling = sibling;
 	}
 
 	@Override
@@ -78,10 +84,16 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 	@Override
 	public void tick() {
 		// The original never reached the engine, so it does not get ticked by
-		// vanilla; the LEFT half ticks it (once per pair) so tickable sounds
-		// keep their movement/volume logic, then both halves re-billboard
-		// around wherever it now is.
-		if (this.channel == StereoSoundChannel.LEFT && this.original instanceof TickableSoundInstance tickable && !tickable.isStopped()) {
+		// vanilla; exactly one half ticks it (LEFT normally, RIGHT if the left
+		// half died early) so tickable sounds keep their movement/volume
+		// logic - this is what makes entity-bound sounds follow their entity
+		// after the split - then both halves re-billboard around wherever the
+		// original now is.
+		boolean ticksOriginal = this.channel == StereoSoundChannel.LEFT
+				? !this.isStopped()
+				: this.sibling != null && this.sibling.isStopped() && !this.isStopped();
+
+		if (ticksOriginal && this.original instanceof TickableSoundInstance tickable && !tickable.isStopped()) {
 			tickable.tick();
 		}
 

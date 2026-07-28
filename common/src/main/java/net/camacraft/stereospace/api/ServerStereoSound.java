@@ -5,6 +5,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 import net.camacraft.stereospace.StereoSpace;
 
@@ -37,6 +38,7 @@ public final class ServerStereoSound {
 
 	private Vec3 leftPos;
 	private Vec3 rightPos;
+	private Entity attachedTo;
 	private boolean removed;
 
 	final Set<UUID> listeners = new HashSet<>();
@@ -101,6 +103,32 @@ public final class ServerStereoSound {
 	}
 
 	/**
+	 * Attaches the sound to an entity: both channel anchors follow the
+	 * entity's position every level tick (the stereo center rides the entity)
+	 * until {@link #detach()} is called. When the entity is removed or changes
+	 * dimension, looping sounds are stopped and one-shots detach and finish
+	 * playing where the entity last was. Manual {@link #setPositions} calls
+	 * while attached are overwritten on the next tick.
+	 */
+	public void attachTo(Entity entity) {
+		if (!removed) {
+			this.attachedTo = entity;
+		}
+	}
+
+	/**
+	 * Stops following the attached entity; the anchors stay wherever the
+	 * entity last was.
+	 */
+	public void detach() {
+		this.attachedTo = null;
+	}
+
+	public Entity getAttachedEntity() {
+		return attachedTo;
+	}
+
+	/**
 	 * Moves only the left channel's anchor.
 	 */
 	public void setLeftPosition(Vec3 leftPos) {
@@ -136,6 +164,32 @@ public final class ServerStereoSound {
 	public void discard() {
 		listeners.clear();
 		removed = true;
+	}
+
+	/**
+	 * Called by {@link StereoSounds#tickLevel} before listener updates; drags
+	 * the anchors along with the attached entity, if any.
+	 */
+	void tickAttachment() {
+		if (attachedTo == null || removed) {
+			return;
+		}
+
+		if (attachedTo.isRemoved() || attachedTo.level() != level) {
+			attachedTo = null;
+
+			if (looping) {
+				stop();
+			}
+
+			return;
+		}
+
+		Vec3 pos = attachedTo.position();
+
+		if (!pos.equals(leftPos) || !pos.equals(rightPos)) {
+			setPositions(pos, pos);
+		}
 	}
 
 	StereoSoundPackets.PlayStereoSoundPayload createPlayPayload() {

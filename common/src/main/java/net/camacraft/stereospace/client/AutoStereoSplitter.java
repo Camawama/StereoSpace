@@ -104,6 +104,8 @@ public final class AutoStereoSplitter {
 
 		SplitStereoSoundInstance left = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.LEFT);
 		SplitStereoSoundInstance right = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.RIGHT);
+		left.setSibling(right);
+		right.setSibling(left);
 		ACTIVE.put(instance, new SplitStereoSoundInstance[] { left, right });
 
 		engine.play(left);
