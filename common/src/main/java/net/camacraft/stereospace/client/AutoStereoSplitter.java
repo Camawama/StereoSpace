@@ -7,11 +7,15 @@ import net.minecraft.client.sounds.SoundEngine;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.sounds.WeighedSoundEvents;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 import net.camacraft.stereospace.api.StereoSoundChannel;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collection;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,11 +35,17 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class AutoStereoSplitter {
 
+	public static final float DEFAULT_SPREAD = 4.0F;
+	public static final float MIN_SPREAD = 0.0F;
+	public static final float MAX_SPREAD = 64.0F;
+
 	/**
 	 * Distance in blocks between the two virtual channels of an auto-split
-	 * sound, as heard by the player.
+	 * sound, as heard by the player. Read live by every playing
+	 * {@link SplitStereoSoundInstance}, so changes apply to sounds that are
+	 * already playing.
 	 */
-	private static float spread = 4.0F;
+	private static float spread = DEFAULT_SPREAD;
 	private static boolean enabled = true;
 
 	private static final Map<ResourceLocation, Boolean> STEREO_FILES = new ConcurrentHashMap<>();
@@ -48,8 +58,16 @@ public final class AutoStereoSplitter {
 		AutoStereoSplitter.enabled = enabled;
 	}
 
+	public static boolean isEnabled() {
+		return enabled;
+	}
+
 	public static void setSpread(float spread) {
-		AutoStereoSplitter.spread = spread;
+		AutoStereoSplitter.spread = Mth.clamp(spread, MIN_SPREAD, MAX_SPREAD);
+	}
+
+	public static float getSpread() {
+		return spread;
 	}
 
 	/**
@@ -84,8 +102,8 @@ public final class AutoStereoSplitter {
 
 		prune(soundManager);
 
-		SplitStereoSoundInstance left = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.LEFT, spread);
-		SplitStereoSoundInstance right = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.RIGHT, spread);
+		SplitStereoSoundInstance left = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.LEFT);
+		SplitStereoSoundInstance right = new SplitStereoSoundInstance(instance, resolved, sound, StereoSoundChannel.RIGHT);
 		ACTIVE.put(instance, new SplitStereoSoundInstance[] { left, right });
 
 		engine.play(left);
@@ -102,10 +120,67 @@ public final class AutoStereoSplitter {
 	public static void onStopped(SoundEngine engine, SoundInstance instance) {
 		SplitStereoSoundInstance[] halves = ACTIVE.remove(instance);
 
+		if (halves == null) {
+			halves = removeSameSoundSameSpot(instance);
+		}
+
 		if (halves != null) {
 			for (SplitStereoSoundInstance half : halves) {
 				half.forceStop();
 				engine.stop(half);
+			}
+		}
+	}
+
+	/**
+	 * Called at the head of {@code SoundEngine.isActive}. The original of a
+	 * split never reached OpenAL, so the engine would report it dead while its
+	 * two halves are still audibly playing; code polling the original (to
+	 * avoid restarting an ambient loop, for instance) must see it as active.
+	 */
+	public static boolean isSplitActive(SoundManager soundManager, SoundInstance instance) {
+		SplitStereoSoundInstance[] halves = ACTIVE.get(instance);
+
+		return halves != null && (soundManager.isActive(halves[0]) || soundManager.isActive(halves[1]));
+	}
+
+	/**
+	 * Compat fallback for the stop forwarding: some sound mods (Sound Physics
+	 * forks, for one) cancel the original play call and re-play a wrapper
+	 * around the instance a few ticks later, so the split gets registered
+	 * under the wrapper while stopping code still holds the original. When
+	 * the identity lookup misses, treat a split playing the same sound from
+	 * the exact same spot as the sound being stopped.
+	 */
+	private static SplitStereoSoundInstance[] removeSameSoundSameSpot(SoundInstance stopped) {
+		for (Iterator<Map.Entry<SoundInstance, SplitStereoSoundInstance[]>> it = ACTIVE.entrySet().iterator(); it.hasNext(); ) {
+			Map.Entry<SoundInstance, SplitStereoSoundInstance[]> entry = it.next();
+			SoundInstance original = entry.getKey();
+
+			if (original.getLocation().equals(stopped.getLocation())
+					&& original.getSource() == stopped.getSource()
+					&& original.getX() == stopped.getX()
+					&& original.getY() == stopped.getY()
+					&& original.getZ() == stopped.getZ()) {
+				it.remove();
+				return entry.getValue();
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Adds a {@link StereoDebugRenderer.DebugPair} for every auto-split pair
+	 * that is still playing, for the in-world debug outlines.
+	 */
+	public static void collectDebugPairs(SoundManager soundManager, Collection<StereoDebugRenderer.DebugPair> out) {
+		for (SplitStereoSoundInstance[] halves : ACTIVE.values()) {
+			if (soundManager.isActive(halves[0]) || soundManager.isActive(halves[1])) {
+				out.add(new StereoDebugRenderer.DebugPair(
+						halves[0].getAnchor(),
+						new Vec3(halves[0].getX(), halves[0].getY(), halves[0].getZ()),
+						new Vec3(halves[1].getX(), halves[1].getY(), halves[1].getZ())));
 			}
 		}
 	}

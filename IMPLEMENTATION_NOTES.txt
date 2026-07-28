@@ -121,10 +121,36 @@ with no cooperation needed from the mod that owns the sound:
      two halves. Tickable originals keep working too: the LEFT half ticks
      the original (once per pair per tick) so moving/fading sounds keep
      their logic, and both halves follow its position.
+     Compat fallback: some sound mods (Sound Physics forks) cancel the
+     original play call and re-play a WRAPPER around the instance a few
+     ticks later, so the split gets registered under the wrapper while
+     stopping code still holds the original and the identity lookup misses.
+     onStopped then falls back to matching any split playing the same sound
+     id from the exact same coordinates and source. SoundEngine.isActive is
+     likewise forwarded: the original reports active while either half is.
 
 AutoStereoSplitter.setEnabled(false) turns the feature off globally;
 AutoStereoSplitter.setSpread(blocks) adjusts how far apart the two virtual
-channels sit for auto-split sounds (default 4.0).
+channels sit for auto-split sounds (default 4.0, clamped to 0-64). Both are
+exposed in game through the client-side /stereospace command (tree built
+loader-neutrally in client/StereoSpaceCommands, registered via Fabric's
+ClientCommandRegistrationCallback and NeoForge's RegisterClientCommandsEvent):
+  /stereospace                  - show current settings
+  /stereospace spread <blocks>  - set the left/right separation
+  /stereospace on | off         - toggle auto-splitting
+  /stereospace reset            - restore the default spread
+  /stereospace debug [on|off]   - toggle in-world outlines of every playing
+                                  stereo pair (red box = LEFT source, green
+                                  box = RIGHT source, yellow box = anchor,
+                                  lines connect anchor to halves), drawn by
+                                  client/StereoDebugRenderer from the loaders'
+                                  world-render events (Fabric
+                                  WorldRenderEvents.AFTER_ENTITIES, NeoForge
+                                  RenderLevelStageEvent AFTER_PARTICLES)
+Auto-split halves read the spread live each tick (it is not pinned at split
+time), so a spread change is heard immediately on already-playing sounds such
+as jukebox records. Server-API sounds keep their per-sound spread. The values
+are not persisted; they reset to defaults on game restart.
 
 Keeping the halves sample-locked: both instances are constructed with a
 RandomSource seeded by the server-assigned sound id. sounds.json variant

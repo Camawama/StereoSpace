@@ -4,6 +4,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
@@ -36,6 +37,11 @@ public class StereoSpaceNeoForge {
 				StereoSounds.onPlayerQuit(player);
 			}
 		});
+
+		if (FMLEnvironment.dist.isClient()) {
+			NeoForge.EVENT_BUS.addListener(StereoSpaceNeoForgeClient::onRegisterClientCommands);
+			NeoForge.EVENT_BUS.addListener(StereoSpaceNeoForgeClient::onRenderLevelStage);
+		}
 	}
 
 	private void registerPayloads(RegisterPayloadHandlersEvent event) {

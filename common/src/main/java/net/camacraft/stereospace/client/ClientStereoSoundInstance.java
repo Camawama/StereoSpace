@@ -76,6 +76,10 @@ public class ClientStereoSoundInstance extends AbstractTickableSoundInstance imp
 		this.anchor = anchor;
 	}
 
+	public Vec3 getAnchor() {
+		return this.anchor;
+	}
+
 	public void forceStop() {
 		this.stop();
 	}

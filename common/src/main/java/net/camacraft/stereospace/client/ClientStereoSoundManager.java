@@ -5,11 +5,13 @@ import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.world.phys.Vec3;
 import net.camacraft.stereospace.api.StereoSoundChannel;
 import net.camacraft.stereospace.api.StereoSoundPackets.MoveStereoSoundPayload;
 import net.camacraft.stereospace.api.StereoSoundPackets.PlayStereoSoundPayload;
 import net.camacraft.stereospace.api.StereoSoundPackets.StopStereoSoundPayload;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -63,6 +65,21 @@ public final class ClientStereoSoundManager {
 
 		if (pair != null) {
 			pair.stop(Minecraft.getInstance().getSoundManager());
+		}
+	}
+
+	/**
+	 * Adds a {@link StereoDebugRenderer.DebugPair} for every server-driven pair
+	 * that is still playing, for the in-world debug outlines.
+	 */
+	public static void collectDebugPairs(SoundManager soundManager, Collection<StereoDebugRenderer.DebugPair> out) {
+		for (StereoPair pair : SOUNDS.values()) {
+			if (soundManager.isActive(pair.left()) || soundManager.isActive(pair.right())) {
+				out.add(new StereoDebugRenderer.DebugPair(
+						pair.left().getAnchor(),
+						new Vec3(pair.left().getX(), pair.left().getY(), pair.left().getZ()),
+						new Vec3(pair.right().getX(), pair.right().getY(), pair.right().getZ())));
+			}
 		}
 	}
 

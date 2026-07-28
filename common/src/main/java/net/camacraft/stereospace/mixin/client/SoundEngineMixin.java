@@ -20,6 +20,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -50,6 +51,17 @@ public abstract class SoundEngineMixin {
 	@Inject(method = "stop(Lnet/minecraft/client/resources/sounds/SoundInstance;)V", at = @At("HEAD"))
 	private void stereospace$stopSplitStereo(SoundInstance soundInstance, CallbackInfo ci) {
 		AutoStereoSplitter.onStopped((SoundEngine) (Object) this, soundInstance);
+	}
+
+	/**
+	 * Likewise, code polling the ORIGINAL instance must see it as active as
+	 * long as either of its halves is still playing.
+	 */
+	@Inject(method = "isActive", at = @At("HEAD"), cancellable = true)
+	private void stereospace$splitStereoActive(SoundInstance soundInstance, CallbackInfoReturnable<Boolean> cir) {
+		if (AutoStereoSplitter.isSplitActive(this.soundManager, soundInstance)) {
+			cir.setReturnValue(true);
+		}
 	}
 
 	/**

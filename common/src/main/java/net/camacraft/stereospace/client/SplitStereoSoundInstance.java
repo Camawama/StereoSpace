@@ -27,19 +27,17 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 	private final WeighedSoundEvents resolved;
 	private final Sound sound;
 	private final StereoSoundChannel channel;
-	private final float spread;
 
 	private boolean stopped;
 	private double x;
 	private double y;
 	private double z;
 
-	public SplitStereoSoundInstance(SoundInstance original, WeighedSoundEvents resolved, Sound sound, StereoSoundChannel channel, float spread) {
+	public SplitStereoSoundInstance(SoundInstance original, WeighedSoundEvents resolved, Sound sound, StereoSoundChannel channel) {
 		this.original = original;
 		this.resolved = resolved;
 		this.sound = sound;
 		this.channel = channel;
-		this.spread = spread;
 		this.updatePosition();
 	}
 
@@ -61,6 +59,11 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 
 	public void forceStop() {
 		this.stopped = true;
+	}
+
+	/** The position of the wrapped original, i.e. where the sound "is". */
+	public Vec3 getAnchor() {
+		return new Vec3(this.original.getX(), this.original.getY(), this.original.getZ());
 	}
 
 	@Override
@@ -86,8 +89,10 @@ public class SplitStereoSoundInstance implements TickableSoundInstance, StereoCh
 	}
 
 	private void updatePosition() {
+		// The spread is read live rather than pinned at split time, so
+		// /stereospace spread changes are heard on already-playing sounds.
 		Vec3 anchor = new Vec3(this.original.getX(), this.original.getY(), this.original.getZ());
-		Vec3 pos = StereoBillboard.channelPosition(anchor, this.channel, this.spread);
+		Vec3 pos = StereoBillboard.channelPosition(anchor, this.channel, AutoStereoSplitter.getSpread());
 		this.x = pos.x;
 		this.y = pos.y;
 		this.z = pos.z;
