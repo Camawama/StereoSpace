@@ -19,6 +19,8 @@ import java.util.function.BiConsumer;
  * <li>{@code /stereospace on | off} - enable/disable auto-splitting for sounds
  * started from then on</li>
  * <li>{@code /stereospace reset} - restore the default spread</li>
+ * <li>{@code /stereospace debug [on|off]} - toggle the in-world source
+ * outlines</li>
  * </ul>
  * The tree is generic over the command source because each loader has its own
  * client command source type (Fabric's {@code FabricClientCommandSource},
